@@ -1,3 +1,4 @@
+
 import argparse
 import cv2
 import glob
@@ -7,6 +8,9 @@ from basicsr.utils.download_util import load_file_from_url
 
 from realesrgan import RealESRGANer
 from realesrgan.archs.srvgg_arch import SRVGGNetCompact
+
+# Import for plotting
+import matplotlib.pyplot as plt
 
 
 def main():
@@ -51,6 +55,8 @@ def main():
         help='Image extension. Options: auto | jpg | png, auto means using the same extension as inputs')
     parser.add_argument(
         '-g', '--gpu-id', type=int, default=None, help='gpu device to use (default=None) can be 0,1,2 for multi-gpu')
+    parser.add_argument(
+        '--plot_images', action='store_true', help='Plot the original and super-resolved images during processing.')
 
     args = parser.parse_args()
 
@@ -83,6 +89,9 @@ def main():
             'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-wdn-x4v3.pth',
             'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth'
         ]
+    else:
+        raise ValueError(f'Model {args.model_name} not supported.')
+
 
     # determine model paths
     if args.model_path is not None:
@@ -91,6 +100,8 @@ def main():
         model_path = os.path.join('weights', args.model_name + '.pth')
         if not os.path.isfile(model_path):
             ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+            # check if 'weights' directory exists, if not create it
+            os.makedirs(os.path.join(ROOT_DIR, 'weights'), exist_ok=True)
             for url in file_url:
                 # model_path will be updated
                 model_path = load_file_from_url(
@@ -135,6 +146,11 @@ def main():
         print('Testing', idx, imgname)
 
         img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        
+        if img is None:
+            print(f"Warning: Failed to read image {path}. Skipping.")
+            continue
+
         if len(img.shape) == 3 and img.shape[2] == 4:
             img_mode = 'RGBA'
         else:
@@ -148,6 +164,8 @@ def main():
         except RuntimeError as error:
             print('Error', error)
             print('If you encounter CUDA out of memory, try to set --tile with a smaller number.')
+        except Exception as error:
+            print(f'An error occurred during processing {imgname}: {error}')
         else:
             if args.ext == 'auto':
                 extension = extension[1:]
@@ -155,11 +173,49 @@ def main():
                 extension = args.ext
             if img_mode == 'RGBA':  # RGBA images should be saved in png format
                 extension = 'png'
+            
             if args.suffix == '':
                 save_path = os.path.join(args.output, f'{imgname}.{extension}')
             else:
                 save_path = os.path.join(args.output, f'{imgname}_{args.suffix}.{extension}')
             cv2.imwrite(save_path, output)
+
+            # Plotting logic
+            if args.plot_images:
+                try:
+                    # Prepare original image for display
+                    if img_mode == 'RGBA': # OpenCV BGRA to Matplotlib RGBA
+                        display_img_orig = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
+                    elif img.ndim == 2: # Grayscale image
+                         display_img_orig = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB) # convert to RGB for consistent display
+                    else: # OpenCV BGR to Matplotlib RGB
+                        display_img_orig = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+                    # Prepare output image for display
+                    if output.shape[2] == 4: # Assuming output is BGRA
+                        display_img_output = cv2.cvtColor(output, cv2.COLOR_BGRA2RGBA)
+                    elif output.ndim == 2: # Grayscale output
+                        display_img_output = cv2.cvtColor(output, cv2.COLOR_GRAY2RGB)
+                    else: # Assuming output is BGR
+                        display_img_output = cv2.cvtColor(output, cv2.COLOR_BGR2RGB)
+
+                    plt.figure(figsize=(15, 7)) # Adjust figure size as needed
+
+                    plt.subplot(1, 2, 1)
+                    plt.imshow(display_img_orig)
+                    plt.title(f'Original LR: {imgname}{extension}')
+                    plt.axis('off')
+
+                    plt.subplot(1, 2, 2)
+                    plt.imshow(display_img_output)
+                    out_title_suffix = f"_{args.suffix}" if args.suffix else ""
+                    plt.title(f'Super-Resolved (x{args.outscale}): {imgname}{out_title_suffix}.{extension}')
+                    plt.axis('off')
+
+                    plt.tight_layout()
+                    plt.show()
+                except Exception as e:
+                    print(f"Error during plotting {imgname}: {e}")
 
 
 if __name__ == '__main__':
