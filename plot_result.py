@@ -7,153 +7,113 @@ import matplotlib.pyplot as plt
 def find_sr_image(lr_img_basename_no_ext, sr_dir, sr_suffix, sr_ext_preference, lr_original_ext_no_dot):
     """
     Attempts to find the corresponding SR image.
-    lr_img_basename_no_ext: Basename of the LR image without extension.
-    sr_dir: Directory where SR images are stored.
-    sr_suffix: Suffix added to SR images (e.g., "_out").
-    sr_ext_preference: Preferred extension for SR images ('auto', 'png', 'jpg').
-    lr_original_ext_no_dot: Original extension of the LR image without the dot.
     """
-    sr_basename_core = f"{lr_img_basename_no_ext}{sr_suffix}" # e.g., image_out
+    sr_basename_core = f"{lr_img_basename_no_ext}{sr_suffix}"
 
     potential_extensions = []
     if sr_ext_preference == 'auto':
-        # Try LR original extension first, then png (common for SR), then others
         if lr_original_ext_no_dot:
             potential_extensions.append(lr_original_ext_no_dot)
-        potential_extensions.extend(['png', 'jpg', 'jpeg', 'bmp', 'tiff'])
+        potential_extensions.extend(['png', 'jpg', 'jpeg', 'bmp', 'tiff']) # Common ones
     else:
         potential_extensions.append(sr_ext_preference)
-        # Add common fallbacks if the preferred one is not found, especially if 'auto' wasn't chosen
         if sr_ext_preference != 'png': potential_extensions.append('png')
         if sr_ext_preference != 'jpg': potential_extensions.append('jpg')
 
-
-    for ext in list(dict.fromkeys(potential_extensions)): # Ensure unique extensions, keep order
+    for ext in list(dict.fromkeys(potential_extensions)): # Unique extensions, keep order
         sr_path = os.path.join(sr_dir, f"{sr_basename_core}.{ext}")
         if os.path.exists(sr_path):
             return sr_path
     
-    # Fallback: try globbing if simple construction fails (e.g. if RGBA forced png, but ext was jpg)
     glob_pattern = os.path.join(sr_dir, f"{sr_basename_core}.*")
     matches = glob.glob(glob_pattern)
     if matches:
-        return matches[0] # Return the first match
-
+        return matches[0]
     return None
 
-
-def display_and_save_image_set(lr_img_cv, sr_img_cv, hr_img_cv, 
-                               lr_filename, sr_filename, hr_filename, 
-                               lr_basename_no_ext, plot_save_dir):
+def display_image_set(lr_img_cv, sr_img_cv, hr_img_cv, 
+                       lr_filename, sr_filename, hr_filename):
     """
-    Displays LR, SR, and optionally HR images using matplotlib and saves the plot.
+    Displays LR, SR, and optionally HR images using matplotlib.
     """
     def prep_for_plot(img_cv):
-        if img_cv is None:
-            return None
-        if img_cv.ndim == 2:  # Grayscale
-            return cv2.cvtColor(img_cv, cv2.COLOR_GRAY2RGB)
-        elif img_cv.shape[2] == 3:  # BGR
-            return cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
-        elif img_cv.shape[2] == 4:  # BGRA
-            return cv2.cvtColor(img_cv, cv2.COLOR_BGRA2RGBA)
+        if img_cv is None: return None
+        if img_cv.ndim == 2: return cv2.cvtColor(img_cv, cv2.COLOR_GRAY2RGB)
+        if img_cv.shape[2] == 3: return cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
+        if img_cv.shape[2] == 4: return cv2.cvtColor(img_cv, cv2.COLOR_BGRA2RGBA)
         return img_cv
 
     lr_display = prep_for_plot(lr_img_cv)
     sr_display = prep_for_plot(sr_img_cv)
     hr_display = prep_for_plot(hr_img_cv)
 
-    num_images = 0
-    if lr_display is not None: num_images +=1
-    if sr_display is not None: num_images +=1
-    if hr_display is not None: num_images +=1
+    num_valid_images = sum(x is not None for x in [lr_display, sr_display, hr_display])
     
-    if num_images == 0:
-        print("  No valid images to display/save for this set.")
+    # Adjust columns: 3 if HR is present and valid, otherwise 2 (LR and SR)
+    # If only one image is valid, plot 1.
+    # More robustly: count valid images to plot
+    images_to_plot = []
+    titles = []
+    if lr_display is not None:
+        images_to_plot.append(lr_display)
+        titles.append(f'LR: {lr_filename}')
+    if hr_display is not None: # Plot HR second if present
+        images_to_plot.append(hr_display)
+        titles.append(f'HR: {hr_filename}')
+    if sr_display is not None:
+        images_to_plot.append(sr_display)
+        titles.append(f'SR: {sr_filename}')
+    
+    num_cols = len(images_to_plot)
+    if num_cols == 0:
+        print("  No valid images to display for this set.")
         return
 
-    fig = plt.figure(figsize=(7 * num_images, 7)) # Explicitly get figure object
-    plot_idx = 1
+    fig, axes = plt.subplots(1, num_cols, figsize=(7 * num_cols, 7))
+    if num_cols == 1: # If only one image, axes is not a list
+        axes = [axes] 
 
-    if lr_display is not None:
-        plt.subplot(1, num_images, plot_idx)
-        plt.imshow(lr_display)
-        plt.title(f'LR: {lr_filename}')
-        plt.axis('off')
-        plot_idx += 1
-
-    if hr_display is not None:
-        plt.subplot(1, num_images, plot_idx)
-        plt.imshow(hr_display)
-        plt.title(f'HR (Ground Truth): {hr_filename}')
-        plt.axis('off')
-        plot_idx += 1
-    
-    if sr_display is not None:
-        plt.subplot(1, num_images, plot_idx)
-        plt.imshow(sr_display)
-        plt.title(f'SR (Generated): {sr_filename}')
-        plt.axis('off')
-        plot_idx += 1
+    for i in range(num_cols):
+        axes[i].imshow(images_to_plot[i])
+        axes[i].set_title(titles[i])
+        axes[i].axis('off')
         
     plt.tight_layout()
-
-    # --- Save the plot ---
-    os.makedirs(plot_save_dir, exist_ok=True)
-    save_plot_path = os.path.join(plot_save_dir, f"{lr_basename_no_ext}_comparison_plot.png")
-    try:
-        plt.savefig(save_plot_path)
-        print(f"  Plot saved to: {save_plot_path}")
-    except Exception as e:
-        print(f"  Error saving plot {save_plot_path}: {e}")
-
-    # --- Attempt to show the plot ---
-    # This might not work in all script environments, but the file is saved.
-    try:
-        plt.show(block=False) # Use block=False if in a loop, or True if you want it to pause
-        plt.pause(0.1) # Give a moment for the plot to potentially render if a GUI backend is active
-    except Exception as e:
-        print(f"  Note: plt.show() may not work in this environment or encountered an error: {e}")
-    
-    plt.close(fig) # Close the figure to free memory
+    plt.show() # This is the command to display the plot.
+    plt.close(fig) # Close the figure to free memory, important in loops.
 
 def main():
-    parser = argparse.ArgumentParser(description="Plot LR, SR, and optionally HR images, and save the plots.")
+    parser = argparse.ArgumentParser(description="Plot LR, SR, and optionally HR images inline in a notebook.")
     parser.add_argument('--lr_dir', type=str, required=True, help='Directory containing Low-Resolution (LR) images.')
     parser.add_argument('--sr_dir', type=str, required=True, help='Directory containing Super-Resolved (SR) images.')
     parser.add_argument('--hr_dir', type=str, default=None, help='(Optional) Directory containing High-Resolution (HR) ground truth images.')
-    parser.add_argument('--plot_save_dir', type=str, default='plotted_images', help='Directory to save the generated comparison plots.')
-    parser.add_argument('--num_to_plot', type=int, default=5, help='Number of image sets to plot. 0 or negative for all.')
-    parser.add_argument('--sr_suffix', type=str, default='_out', help='Suffix used for SR images (e.g., if LR is img.png and SR is img_out.png, suffix is _out). Empty string if no suffix.')
+    parser.add_argument('--num_to_plot', type=int, default=3, help='Number of image sets to plot. 0 or negative for all.')
+    parser.add_argument('--sr_suffix', type=str, default='_out', help='Suffix for SR images (e.g., if LR is img.png and SR is img_out.png, suffix is _out). Use "" for no suffix.')
     parser.add_argument('--sr_ext', type=str, default='auto', help='Expected extension for SR images (e.g., png, jpg). "auto" tries LR extension then common ones.')
 
     args = parser.parse_args()
 
-    if not os.path.isdir(args.lr_dir):
-        print(f"Error: LR directory not found: {args.lr_dir}")
-        return
-    if not os.path.isdir(args.sr_dir):
-        print(f"Error: SR directory not found: {args.sr_dir}")
-        return
-    if args.hr_dir and not os.path.isdir(args.hr_dir):
-        print(f"Warning: HR directory specified but not found: {args.hr_dir}. HR images will not be plotted.")
-        args.hr_dir = None
+    # --- Crucial for notebook environments ---
+    # This script assumes the notebook environment is already configured for inline plotting
+    # (e.g., via %matplotlib inline in a previous cell).
 
-    os.makedirs(args.plot_save_dir, exist_ok=True)
-    print(f"Plots will be saved in: {args.plot_save_dir}")
+    if not os.path.isdir(args.lr_dir):
+        print(f"Error: LR directory not found: {args.lr_dir}"); return
+    if not os.path.isdir(args.sr_dir):
+        print(f"Error: SR directory not found: {args.sr_dir}"); return
+    if args.hr_dir and not os.path.isdir(args.hr_dir):
+        print(f"Warning: HR directory specified but not found: {args.hr_dir}. HR images will not be plotted."); args.hr_dir = None
 
     lr_image_paths = sorted(glob.glob(os.path.join(args.lr_dir, '*')))
     if not lr_image_paths:
-        print(f"No images found in LR directory: {args.lr_dir}")
-        return
+        print(f"No images found in LR directory: {args.lr_dir}"); return
 
     images_to_process = lr_image_paths
     if args.num_to_plot > 0:
         images_to_process = lr_image_paths[:args.num_to_plot]
-        print(f"Processing the first {args.num_to_plot} images.")
 
+    print(f"Attempting to plot {len(images_to_process)} image set(s)...")
 
-    count = 0
     for lr_path in images_to_process:
         lr_filename_full = os.path.basename(lr_path)
         lr_basename_no_ext, lr_ext_with_dot = os.path.splitext(lr_filename_full)
@@ -161,62 +121,29 @@ def main():
 
         print(f"\nProcessing LR image: {lr_filename_full}")
 
-        # Load LR image
         lr_img_cv = cv2.imread(lr_path, cv2.IMREAD_UNCHANGED)
-        if lr_img_cv is None:
-            print(f"  Could not read LR image: {lr_path}")
-            continue
+        if lr_img_cv is None: print(f"  Could not read LR: {lr_path}"); continue
         
-        # Find and load SR image
-        # Note: args.sr_suffix from inference_realesrgan.py becomes the suffix here.
-        # If inference script uses --suffix foo, SR file is imgname_foo.ext.
-        # So here, sr_suffix should be _foo.
-        # If inference --suffix is empty, SR file is imgname.ext. 
-        # So here, sr_suffix should be empty string.
-        actual_sr_suffix_for_find = args.sr_suffix # Corrected logic: use the suffix as is
-        
-        sr_path = find_sr_image(lr_basename_no_ext, args.sr_dir, actual_sr_suffix_for_find, args.sr_ext, lr_ext_no_dot)
-        sr_img_cv = None
-        sr_filename_full = "N/A (Not Found)"
+        sr_path = find_sr_image(lr_basename_no_ext, args.sr_dir, args.sr_suffix, args.sr_ext, lr_ext_no_dot)
+        sr_img_cv = None; sr_filename_full = "N/A (SR Not Found)"
         if sr_path:
             sr_img_cv = cv2.imread(sr_path, cv2.IMREAD_UNCHANGED)
-            sr_filename_full = os.path.basename(sr_path)
-            if sr_img_cv is None:
-                print(f"  Found SR image path but could not read: {sr_path}")
-                sr_filename_full = f"N/A (Read Fail: {os.path.basename(sr_path)})"
-            else:
-                print(f"  Found SR image: {sr_filename_full}")
-        else:
-            print(f"  SR image not found for {lr_basename_no_ext} with suffix '{actual_sr_suffix_for_find}' and ext '{args.sr_ext}' in {args.sr_dir}")
+            if sr_img_cv is not None: sr_filename_full = os.path.basename(sr_path)
+            else: print(f"  Found SR path but failed to read: {sr_path}"); sr_filename_full = f"N/A (SR Read Fail: {os.path.basename(sr_path)})"
+        else: print(f"  SR image not found for {lr_basename_no_ext} (suffix '{args.sr_suffix}', ext '{args.sr_ext}')")
 
-        # Find and load HR image (if hr_dir is provided)
-        hr_img_cv = None
-        hr_filename_full = "N/A (Not Specified or Not Found)"
+        hr_img_cv = None; hr_filename_full = "N/A (HR Not Specified or Found)"
         if args.hr_dir:
-            # HR images usually have the same name and extension as original LR
-            hr_path = os.path.join(args.hr_dir, lr_filename_full)
+            hr_path = os.path.join(args.hr_dir, lr_filename_full) # Assumes HR has same name as LR
             if os.path.exists(hr_path):
                 hr_img_cv = cv2.imread(hr_path, cv2.IMREAD_UNCHANGED)
-                hr_filename_full = os.path.basename(hr_path)
-                if hr_img_cv is None:
-                    print(f"  Found HR image path but could not read: {hr_path}")
-                    hr_filename_full = f"N/A (Read Fail: {os.path.basename(hr_path)})"
-                else:
-                     print(f"  Found HR image: {hr_filename_full}")
-            else:
-                print(f"  HR image not found at: {hr_path}")
+                if hr_img_cv is not None: hr_filename_full = os.path.basename(hr_path)
+                else: print(f"  Found HR path but failed to read: {hr_path}"); hr_filename_full = f"N/A (HR Read Fail: {os.path.basename(hr_path)})"
+            # else: print(f"  HR image not found at: {hr_path}") # Can be noisy if many HR are missing
         
-        display_and_save_image_set(
-            lr_img_cv, sr_img_cv, hr_img_cv, 
-            lr_filename_full, sr_filename_full, hr_filename_full,
-            lr_basename_no_ext, args.plot_save_dir
-        )
-        count += 1
-
-    if count == 0:
-        print("No images were processed or plotted.")
-    else:
-        print(f"\nFinished processing. {count} plot(s) attempted. Check the '{args.plot_save_dir}' directory for saved image files.")
+        display_image_set(lr_img_cv, sr_img_cv, hr_img_cv, 
+                           lr_filename_full, sr_filename_full, hr_filename_full)
+    print("\nFinished plotting attempts.")
 
 if __name__ == '__main__':
     main()
