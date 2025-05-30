@@ -13,22 +13,28 @@ def find_sr_image(lr_img_basename_no_ext, sr_dir, sr_suffix, sr_ext_preference, 
     sr_ext_preference: Preferred extension for SR images ('auto', 'png', 'jpg').
     lr_original_ext_no_dot: Original extension of the LR image without the dot.
     """
-    sr_basename = f"{lr_img_basename_no_ext}{sr_suffix}" if sr_suffix else lr_img_basename_no_ext
-    
+    sr_basename_core = f"{lr_img_basename_no_ext}{sr_suffix}" # e.g., image_out
+
     potential_extensions = []
     if sr_ext_preference == 'auto':
-        potential_extensions.extend([lr_original_ext_no_dot, 'png', 'jpg', 'jpeg', 'bmp', 'tiff'])
+        # Try LR original extension first, then png (common for SR), then others
+        if lr_original_ext_no_dot:
+            potential_extensions.append(lr_original_ext_no_dot)
+        potential_extensions.extend(['png', 'jpg', 'jpeg', 'bmp', 'tiff'])
     else:
         potential_extensions.append(sr_ext_preference)
-        if sr_ext_preference != 'png': potential_extensions.append('png') # common fallback
+        # Add common fallbacks if the preferred one is not found, especially if 'auto' wasn't chosen
+        if sr_ext_preference != 'png': potential_extensions.append('png')
+        if sr_ext_preference != 'jpg': potential_extensions.append('jpg')
 
-    for ext in potential_extensions:
-        sr_path = os.path.join(sr_dir, f"{sr_basename}.{ext}")
+
+    for ext in list(dict.fromkeys(potential_extensions)): # Ensure unique extensions, keep order
+        sr_path = os.path.join(sr_dir, f"{sr_basename_core}.{ext}")
         if os.path.exists(sr_path):
             return sr_path
     
-    # Fallback: try globbing if simple construction fails (e.g. if RGBA forced png)
-    glob_pattern = os.path.join(sr_dir, f"{sr_basename}.*")
+    # Fallback: try globbing if simple construction fails (e.g. if RGBA forced png, but ext was jpg)
+    glob_pattern = os.path.join(sr_dir, f"{sr_basename_core}.*")
     matches = glob.glob(glob_pattern)
     if matches:
         return matches[0] # Return the first match
@@ -36,9 +42,11 @@ def find_sr_image(lr_img_basename_no_ext, sr_dir, sr_suffix, sr_ext_preference, 
     return None
 
 
-def display_image_set(lr_img_cv, sr_img_cv, hr_img_cv, lr_filename, sr_filename, hr_filename):
+def display_and_save_image_set(lr_img_cv, sr_img_cv, hr_img_cv, 
+                               lr_filename, sr_filename, hr_filename, 
+                               lr_basename_no_ext, plot_save_dir):
     """
-    Displays LR, SR, and optionally HR images using matplotlib.
+    Displays LR, SR, and optionally HR images using matplotlib and saves the plot.
     """
     def prep_for_plot(img_cv):
         if img_cv is None:
@@ -61,10 +69,10 @@ def display_image_set(lr_img_cv, sr_img_cv, hr_img_cv, lr_filename, sr_filename,
     if hr_display is not None: num_images +=1
     
     if num_images == 0:
-        print("No images to display for this set.")
+        print("  No valid images to display/save for this set.")
         return
 
-    plt.figure(figsize=(7 * num_images, 7))
+    fig = plt.figure(figsize=(7 * num_images, 7)) # Explicitly get figure object
     plot_idx = 1
 
     if lr_display is not None:
@@ -89,15 +97,34 @@ def display_image_set(lr_img_cv, sr_img_cv, hr_img_cv, lr_filename, sr_filename,
         plot_idx += 1
         
     plt.tight_layout()
-    plt.show()
+
+    # --- Save the plot ---
+    os.makedirs(plot_save_dir, exist_ok=True)
+    save_plot_path = os.path.join(plot_save_dir, f"{lr_basename_no_ext}_comparison_plot.png")
+    try:
+        plt.savefig(save_plot_path)
+        print(f"  Plot saved to: {save_plot_path}")
+    except Exception as e:
+        print(f"  Error saving plot {save_plot_path}: {e}")
+
+    # --- Attempt to show the plot ---
+    # This might not work in all script environments, but the file is saved.
+    try:
+        plt.show(block=False) # Use block=False if in a loop, or True if you want it to pause
+        plt.pause(0.1) # Give a moment for the plot to potentially render if a GUI backend is active
+    except Exception as e:
+        print(f"  Note: plt.show() may not work in this environment or encountered an error: {e}")
+    
+    plt.close(fig) # Close the figure to free memory
 
 def main():
-    parser = argparse.ArgumentParser(description="Plot LR, SR, and optionally HR images.")
+    parser = argparse.ArgumentParser(description="Plot LR, SR, and optionally HR images, and save the plots.")
     parser.add_argument('--lr_dir', type=str, required=True, help='Directory containing Low-Resolution (LR) images.')
     parser.add_argument('--sr_dir', type=str, required=True, help='Directory containing Super-Resolved (SR) images.')
     parser.add_argument('--hr_dir', type=str, default=None, help='(Optional) Directory containing High-Resolution (HR) ground truth images.')
-    parser.add_argument('--num_to_plot', type=int, default=5, help='Number of image sets to plot. 0 for all.')
-    parser.add_argument('--sr_suffix', type=str, default='_out', help='Suffix used for SR images (e.g., _out if LR is img.png and SR is img_out.png). Empty string if no suffix.')
+    parser.add_argument('--plot_save_dir', type=str, default='plotted_images', help='Directory to save the generated comparison plots.')
+    parser.add_argument('--num_to_plot', type=int, default=5, help='Number of image sets to plot. 0 or negative for all.')
+    parser.add_argument('--sr_suffix', type=str, default='_out', help='Suffix used for SR images (e.g., if LR is img.png and SR is img_out.png, suffix is _out). Empty string if no suffix.')
     parser.add_argument('--sr_ext', type=str, default='auto', help='Expected extension for SR images (e.g., png, jpg). "auto" tries LR extension then common ones.')
 
     args = parser.parse_args()
@@ -112,18 +139,24 @@ def main():
         print(f"Warning: HR directory specified but not found: {args.hr_dir}. HR images will not be plotted.")
         args.hr_dir = None
 
+    os.makedirs(args.plot_save_dir, exist_ok=True)
+    print(f"Plots will be saved in: {args.plot_save_dir}")
+
     lr_image_paths = sorted(glob.glob(os.path.join(args.lr_dir, '*')))
     if not lr_image_paths:
         print(f"No images found in LR directory: {args.lr_dir}")
         return
 
-    count = 0
-    for lr_path in lr_image_paths:
-        if args.num_to_plot > 0 and count >= args.num_to_plot:
-            break
+    images_to_process = lr_image_paths
+    if args.num_to_plot > 0:
+        images_to_process = lr_image_paths[:args.num_to_plot]
+        print(f"Processing the first {args.num_to_plot} images.")
 
+
+    count = 0
+    for lr_path in images_to_process:
         lr_filename_full = os.path.basename(lr_path)
-        lr_basename, lr_ext_with_dot = os.path.splitext(lr_filename_full)
+        lr_basename_no_ext, lr_ext_with_dot = os.path.splitext(lr_filename_full)
         lr_ext_no_dot = lr_ext_with_dot[1:] if lr_ext_with_dot else ""
 
         print(f"\nProcessing LR image: {lr_filename_full}")
@@ -135,22 +168,30 @@ def main():
             continue
         
         # Find and load SR image
-        sr_path = find_sr_image(lr_basename, args.sr_dir, args.sr_suffix, args.sr_ext, lr_ext_no_dot)
+        # Note: args.sr_suffix from inference_realesrgan.py becomes the suffix here.
+        # If inference script uses --suffix foo, SR file is imgname_foo.ext.
+        # So here, sr_suffix should be _foo.
+        # If inference --suffix is empty, SR file is imgname.ext. 
+        # So here, sr_suffix should be empty string.
+        actual_sr_suffix_for_find = args.sr_suffix # Corrected logic: use the suffix as is
+        
+        sr_path = find_sr_image(lr_basename_no_ext, args.sr_dir, actual_sr_suffix_for_find, args.sr_ext, lr_ext_no_dot)
         sr_img_cv = None
-        sr_filename_full = "N/A"
+        sr_filename_full = "N/A (Not Found)"
         if sr_path:
             sr_img_cv = cv2.imread(sr_path, cv2.IMREAD_UNCHANGED)
             sr_filename_full = os.path.basename(sr_path)
             if sr_img_cv is None:
                 print(f"  Found SR image path but could not read: {sr_path}")
+                sr_filename_full = f"N/A (Read Fail: {os.path.basename(sr_path)})"
             else:
                 print(f"  Found SR image: {sr_filename_full}")
         else:
-            print(f"  SR image not found for {lr_basename} with suffix '{args.sr_suffix}' in {args.sr_dir}")
+            print(f"  SR image not found for {lr_basename_no_ext} with suffix '{actual_sr_suffix_for_find}' and ext '{args.sr_ext}' in {args.sr_dir}")
 
         # Find and load HR image (if hr_dir is provided)
         hr_img_cv = None
-        hr_filename_full = "N/A"
+        hr_filename_full = "N/A (Not Specified or Not Found)"
         if args.hr_dir:
             # HR images usually have the same name and extension as original LR
             hr_path = os.path.join(args.hr_dir, lr_filename_full)
@@ -159,19 +200,23 @@ def main():
                 hr_filename_full = os.path.basename(hr_path)
                 if hr_img_cv is None:
                     print(f"  Found HR image path but could not read: {hr_path}")
+                    hr_filename_full = f"N/A (Read Fail: {os.path.basename(hr_path)})"
                 else:
-                    print(f"  Found HR image: {hr_filename_full}")
+                     print(f"  Found HR image: {hr_filename_full}")
             else:
                 print(f"  HR image not found at: {hr_path}")
         
-        display_image_set(lr_img_cv, sr_img_cv, hr_img_cv, 
-                          lr_filename_full, sr_filename_full, hr_filename_full)
+        display_and_save_image_set(
+            lr_img_cv, sr_img_cv, hr_img_cv, 
+            lr_filename_full, sr_filename_full, hr_filename_full,
+            lr_basename_no_ext, args.plot_save_dir
+        )
         count += 1
 
     if count == 0:
         print("No images were processed or plotted.")
     else:
-        print(f"\nPlotted {count} image set(s).")
+        print(f"\nFinished processing. {count} plot(s) attempted. Check the '{args.plot_save_dir}' directory for saved image files.")
 
 if __name__ == '__main__':
     main()
