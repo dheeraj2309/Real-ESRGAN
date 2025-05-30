@@ -1,3 +1,4 @@
+# --- START OF FILE inference_realesrgan.py ---
 
 import argparse
 import cv2
@@ -12,12 +13,76 @@ from realesrgan.archs.srvgg_arch import SRVGGNetCompact
 # Import for plotting
 import matplotlib.pyplot as plt
 
+def display_images(lr_img, sr_img, lr_img_basename, sr_img_basename, hr_img=None, hr_img_basename=None):
+    """
+    Displays LR, SR, and optionally HR images using matplotlib.
+    lr_img: OpenCV image (numpy array) for Low Resolution.
+    sr_img: OpenCV image (numpy array) for Super Resolved.
+    lr_img_basename: Filename for LR image title.
+    sr_img_basename: Filename for SR image title.
+    hr_img: OpenCV image (numpy array) for High Resolution (Ground Truth), optional.
+    hr_img_basename: Filename for HR image title, optional.
+    """
+    # Helper to convert OpenCV BGR/BGRA/Gray to Matplotlib RGB/RGBA
+    def prep_for_plot(img_cv):
+        if img_cv is None:
+            return None
+        if img_cv.ndim == 2:  # Grayscale
+            return cv2.cvtColor(img_cv, cv2.COLOR_GRAY2RGB)
+        elif img_cv.shape[2] == 3:  # BGR
+            return cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
+        elif img_cv.shape[2] == 4:  # BGRA
+            return cv2.cvtColor(img_cv, cv2.COLOR_BGRA2RGBA)
+        return img_cv  # Should not happen with typical image formats
+
+    lr_display = prep_for_plot(lr_img)
+    sr_display = prep_for_plot(sr_img)
+    hr_display = prep_for_plot(hr_img) if hr_img is not None else None
+
+    num_images = 2
+    if hr_display is not None:
+        num_images = 3
+
+    plt.figure(figsize=(7 * num_images, 7)) # Adjust figure size based on number of images
+
+    # Plot LR image
+    plt.subplot(1, num_images, 1)
+    plt.imshow(lr_display)
+    plt.title(f'Original LR: {lr_img_basename}')
+    plt.axis('off')
+
+    if hr_display is not None:
+        # Plot HR image
+        plt.subplot(1, num_images, 2)
+        plt.imshow(hr_display)
+        plt.title(f'Ground Truth HR: {hr_img_basename}')
+        plt.axis('off')
+        # Plot SR image (as the third image)
+        plt.subplot(1, num_images, 3)
+        plt.imshow(sr_display)
+        plt.title(f'Super-Resolved: {sr_img_basename}')
+        plt.axis('off')
+    else:
+        # Plot SR image (as the second image)
+        plt.subplot(1, num_images, 2)
+        plt.imshow(sr_display)
+        plt.title(f'Super-Resolved: {sr_img_basename}')
+        plt.axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
 
 def main():
     """Inference demo for Real-ESRGAN.
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument('-i', '--input', type=str, default='inputs', help='Input image or folder')
+    parser.add_argument('-i', '--input', type=str, default='inputs', help='Input image or folder (LR images)')
+    parser.add_argument(
+        '--hr_input',
+        type=str,
+        default=None,
+        help='Path to the Ground Truth High-Resolution (HR) image folder. Used if --plot_images is active.')
     parser.add_argument(
         '-n',
         '--model_name',
@@ -25,7 +90,7 @@ def main():
         default='RealESRGAN_x4plus',
         help=('Model names: RealESRGAN_x4plus | RealESRNet_x4plus | RealESRGAN_x4plus_anime_6B | RealESRGAN_x2plus | '
               'realesr-animevideov3 | realesr-general-x4v3'))
-    parser.add_argument('-o', '--output', type=str, default='results', help='Output folder')
+    parser.add_argument('-o', '--output', type=str, default='results', help='Output folder for SR images')
     parser.add_argument(
         '-dn',
         '--denoise_strength',
@@ -56,7 +121,7 @@ def main():
     parser.add_argument(
         '-g', '--gpu-id', type=int, default=None, help='gpu device to use (default=None) can be 0,1,2 for multi-gpu')
     parser.add_argument(
-        '--plot_images', action='store_true', help='Plot the original and super-resolved images during processing.')
+        '--plot_images', action='store_true', help='Plot the original LR, Ground Truth HR (if available), and Super-Resolved images.')
 
     args = parser.parse_args()
 
@@ -142,13 +207,13 @@ def main():
         paths = sorted(glob.glob(os.path.join(args.input, '*')))
 
     for idx, path in enumerate(paths):
-        imgname, extension = os.path.splitext(os.path.basename(path))
+        imgname, original_lr_extension = os.path.splitext(os.path.basename(path))
         print('Testing', idx, imgname)
 
-        img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        img = cv2.imread(path, cv2.IMREAD_UNCHANGED) # This is the LR image
         
         if img is None:
-            print(f"Warning: Failed to read image {path}. Skipping.")
+            print(f"Warning: Failed to read LR image {path}. Skipping.")
             continue
 
         if len(img.shape) == 3 and img.shape[2] == 4:
@@ -160,63 +225,61 @@ def main():
             if args.face_enhance:
                 _, _, output = face_enhancer.enhance(img, has_aligned=False, only_center_face=False, paste_back=True)
             else:
-                output, _ = upsampler.enhance(img, outscale=args.outscale)
+                output, _ = upsampler.enhance(img, outscale=args.outscale) # This is the SR image
         except RuntimeError as error:
-            print('Error', error)
+            print('Error during SR:', error)
             print('If you encounter CUDA out of memory, try to set --tile with a smaller number.')
+            continue # Skip saving and plotting for this image
         except Exception as error:
-            print(f'An error occurred during processing {imgname}: {error}')
+            print(f'An error occurred during SR processing {imgname}: {error}')
+            continue # Skip saving and plotting for this image
         else:
+            # Determine output extension
             if args.ext == 'auto':
-                extension = extension[1:]
+                current_output_extension = original_lr_extension[1:] # remove dot
             else:
-                extension = args.ext
+                current_output_extension = args.ext
             if img_mode == 'RGBA':  # RGBA images should be saved in png format
-                extension = 'png'
+                current_output_extension = 'png'
             
+            # Construct save path for SR image
             if args.suffix == '':
-                save_path = os.path.join(args.output, f'{imgname}.{extension}')
+                save_path = os.path.join(args.output, f'{imgname}.{current_output_extension}')
             else:
-                save_path = os.path.join(args.output, f'{imgname}_{args.suffix}.{extension}')
+                save_path = os.path.join(args.output, f'{imgname}_{args.suffix}.{current_output_extension}')
+            
             cv2.imwrite(save_path, output)
 
             # Plotting logic
             if args.plot_images:
+                hr_img = None
+                hr_img_basename = None
+                if args.hr_input:
+                    # Construct path to the corresponding HR image
+                    # Assumes HR image has the same base name and original extension as LR image
+                    hr_image_path = os.path.join(args.hr_input, f'{imgname}{original_lr_extension}')
+                    if os.path.exists(hr_image_path):
+                        hr_img = cv2.imread(hr_image_path, cv2.IMREAD_UNCHANGED)
+                        if hr_img is None:
+                            print(f"Warning: Failed to read HR image {hr_image_path}, though file exists.")
+                        else:
+                             hr_img_basename = os.path.basename(hr_image_path)
+                    else:
+                        print(f"Warning: Ground Truth HR image not found at {hr_image_path}")
+                
                 try:
-                    # Prepare original image for display
-                    if img_mode == 'RGBA': # OpenCV BGRA to Matplotlib RGBA
-                        display_img_orig = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
-                    elif img.ndim == 2: # Grayscale image
-                         display_img_orig = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB) # convert to RGB for consistent display
-                    else: # OpenCV BGR to Matplotlib RGB
-                        display_img_orig = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-                    # Prepare output image for display
-                    if output.shape[2] == 4: # Assuming output is BGRA
-                        display_img_output = cv2.cvtColor(output, cv2.COLOR_BGRA2RGBA)
-                    elif output.ndim == 2: # Grayscale output
-                        display_img_output = cv2.cvtColor(output, cv2.COLOR_GRAY2RGB)
-                    else: # Assuming output is BGR
-                        display_img_output = cv2.cvtColor(output, cv2.COLOR_BGR2RGB)
-
-                    plt.figure(figsize=(15, 7)) # Adjust figure size as needed
-
-                    plt.subplot(1, 2, 1)
-                    plt.imshow(display_img_orig)
-                    plt.title(f'Original LR: {imgname}{extension}')
-                    plt.axis('off')
-
-                    plt.subplot(1, 2, 2)
-                    plt.imshow(display_img_output)
-                    out_title_suffix = f"_{args.suffix}" if args.suffix else ""
-                    plt.title(f'Super-Resolved (x{args.outscale}): {imgname}{out_title_suffix}.{extension}')
-                    plt.axis('off')
-
-                    plt.tight_layout()
-                    plt.show()
+                    display_images(
+                        lr_img=img, 
+                        sr_img=output, 
+                        lr_img_basename=os.path.basename(path),
+                        sr_img_basename=os.path.basename(save_path),
+                        hr_img=hr_img,
+                        hr_img_basename=hr_img_basename
+                    )
                 except Exception as e:
-                    print(f"Error during plotting {imgname}: {e}")
+                    print(f"Error during plotting for {imgname}: {e}")
 
 
 if __name__ == '__main__':
     main()
+# --- END OF FILE inference_realesrgan.py ---
