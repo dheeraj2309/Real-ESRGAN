@@ -17,9 +17,9 @@ datasets:
   train:
     name: DIV2K
     type: RealESRGANPairedDataset
-    dataroot_gt: datasets/DF2K
-    dataroot_lq: datasets/DF2K
-    meta_info: datasets/DF2K/meta_info/meta_info_DIV2K_sub_pair.txt
+    dataroot_gt: dataset/train/HR
+    dataroot_lq: datase/train/LR
+    meta_info: "dataset/train/meta_pair_info.txt"
     io_backend:
       type: disk
 
@@ -88,7 +88,7 @@ train:
     milestones: [400000]
     gamma: 0.5
 
-  total_iter: 400000
+  total_iter: 100
   warmup_iter: -1  # no warm up
 
   # losses
@@ -137,7 +137,7 @@ train:
 
 # logging settings
 logger:
-  print_freq: 100
+  print_freq: 5
   save_checkpoint_freq: !!float 5e3
   use_tb_logger: true
   wandb:
